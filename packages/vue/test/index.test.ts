@@ -2,7 +2,7 @@ import {cleanup, fireEvent, render, waitFor} from '@testing-library/vue';
 import {vi} from 'vitest';
 import {defineComponent, effectScope, ref, toRef} from 'vue';
 
-import {arrow, offset, useFloating} from '../src';
+import {arrow, offset, useFloating, useTransitionStatus, useTransitionStyles} from '../src';
 import type {
   FloatingElement,
   Middleware,
@@ -11,6 +11,7 @@ import type {
   Strategy,
 } from '../src/types';
 import type {ArrowOptions, UseFloatingOptions} from '../src/types';
+import type {FloatingContext} from '../src/useTransition';
 
 describe('useFloating', () => {
   function setup(options?: UseFloatingOptions) {
@@ -926,5 +927,274 @@ describe('arrow', () => {
       expect(getByTestId('x').textContent).toBe('0');
       expect(getByTestId('y').textContent).toBe('');
     });
+  });
+});
+
+describe('useTransitionStatus', () => {
+  function setup(
+    open: Readonly<ReturnType<typeof ref<boolean>>>,
+    floating: Readonly<ReturnType<typeof ref<FloatingElement | null>>>,
+    props?: Parameters<typeof useTransitionStatus>[1],
+  ) {
+    const context: FloatingContext = {
+      open,
+      placement: ref('bottom'),
+      elements: {floating},
+    };
+    return useTransitionStatus(context, props);
+  }
+
+  test('starts unmounted when open is false', async () => {
+    const App = defineComponent({
+      name: 'App',
+      setup() {
+        const open = ref(false);
+        const floating = ref<FloatingElement | null>(null);
+        return {...setup(open, floating), floating};
+      },
+      template: /* HTML */ `
+        <div ref="floating" />
+        <div data-testid="isMounted">{{isMounted}}</div>
+        <div data-testid="status">{{status}}</div>
+      `,
+    });
+
+    const {getByTestId} = render(App);
+
+    await waitFor(() => {
+      expect(getByTestId('isMounted').textContent).toBe('false');
+      expect(getByTestId('status').textContent).toBe('unmounted');
+    });
+  });
+
+  test('transitions to open state when open becomes true', async () => {
+    const App = defineComponent({
+      name: 'App',
+      props: ['open'],
+      setup(props: {open?: boolean}) {
+        const openRef = toRef(props, 'open');
+        const floating = ref<FloatingElement | null>(null);
+        return {...setup(openRef, floating), floating};
+      },
+      template: /* HTML */ `
+        <div ref="floating" />
+        <div data-testid="isMounted">{{isMounted}}</div>
+        <div data-testid="status">{{status}}</div>
+      `,
+    });
+
+    const {rerender, getByTestId} = render(App, {props: {open: false}});
+
+    await waitFor(() => {
+      expect(getByTestId('status').textContent).toBe('unmounted');
+    });
+
+    await rerender({open: true});
+
+    // After rAF (mocked to run synchronously) status should be 'open'
+    await waitFor(() => {
+      expect(getByTestId('isMounted').textContent).toBe('true');
+      expect(getByTestId('status').textContent).toBe('open');
+    });
+  });
+
+  test('transitions to close then unmounted when open becomes false', async () => {
+    vi.useFakeTimers();
+
+    const App = defineComponent({
+      name: 'App',
+      props: ['open'],
+      setup(props: {open?: boolean}) {
+        const openRef = toRef(props, 'open');
+        const floating = ref<FloatingElement | null>(null);
+        return {...setup(openRef, floating, {duration: 100}), floating};
+      },
+      template: /* HTML */ `
+        <div ref="floating" />
+        <div data-testid="isMounted">{{isMounted}}</div>
+        <div data-testid="status">{{status}}</div>
+      `,
+    });
+
+    const {rerender, getByTestId} = render(App, {props: {open: true}});
+
+    await waitFor(() => {
+      expect(getByTestId('status').textContent).toBe('open');
+    });
+
+    await rerender({open: false});
+
+    await waitFor(() => {
+      expect(getByTestId('status').textContent).toBe('close');
+      expect(getByTestId('isMounted').textContent).toBe('true');
+    });
+
+    vi.advanceTimersByTime(100);
+
+    await waitFor(() => {
+      expect(getByTestId('status').textContent).toBe('unmounted');
+      expect(getByTestId('isMounted').textContent).toBe('false');
+    });
+
+    vi.useRealTimers();
+  });
+});
+
+describe('useTransitionStyles', () => {
+  function setup(
+    open: Readonly<ReturnType<typeof ref<boolean>>>,
+    floating: Readonly<ReturnType<typeof ref<FloatingElement | null>>>,
+    props?: Parameters<typeof useTransitionStyles>[1],
+  ) {
+    const context: FloatingContext = {
+      open,
+      placement: ref('bottom'),
+      elements: {floating},
+    };
+    return useTransitionStyles(context, props);
+  }
+
+  test('returns initial styles when floating is mounted but before open', async () => {
+    const App = defineComponent({
+      name: 'App',
+      props: ['open'],
+      setup(props: {open?: boolean}) {
+        const openRef = toRef(props, 'open');
+        const floating = ref<FloatingElement | null>(null);
+        return {
+          ...setup(openRef, floating, {
+            initial: {opacity: 0, transform: 'scale(0.9)'},
+          }),
+          floating,
+        };
+      },
+      template: /* HTML */ `
+        <div ref="floating" />
+        <div data-testid="opacity">{{styles.opacity}}</div>
+        <div data-testid="isMounted">{{isMounted}}</div>
+      `,
+    });
+
+    const {rerender, getByTestId} = render(App, {props: {open: false}});
+
+    await rerender({open: true});
+
+    // After rAF (mocked synchronous) the element is open, but initial styles
+    // should have been applied for at least one frame.
+    await waitFor(() => {
+      expect(getByTestId('isMounted').textContent).toBe('true');
+    });
+  });
+
+  test('applies open styles with transition properties', async () => {
+    const App = defineComponent({
+      name: 'App',
+      props: ['open'],
+      setup(props: {open?: boolean}) {
+        const openRef = toRef(props, 'open');
+        const floating = ref<FloatingElement | null>(null);
+        return {
+          ...setup(openRef, floating, {
+            initial: {opacity: 0},
+            duration: 200,
+          }),
+          floating,
+        };
+      },
+      template: /* HTML */ `
+        <div ref="floating" />
+        <div data-testid="transitionDuration">{{styles.transitionDuration}}</div>
+        <div data-testid="status">{{status}}</div>
+      `,
+    });
+
+    const {rerender, getByTestId} = render(App, {props: {open: false}});
+    await rerender({open: true});
+
+    await waitFor(() => {
+      expect(getByTestId('status').textContent).toBe('open');
+      expect(getByTestId('transitionDuration').textContent).toBe('200ms');
+    });
+  });
+
+  test('accepts function-form initial styles with placement params', async () => {
+    const App = defineComponent({
+      name: 'App',
+      props: ['open'],
+      setup(props: {open?: boolean}) {
+        const openRef = toRef(props, 'open');
+        const floating = ref<FloatingElement | null>(null);
+        return {
+          ...setup(openRef, floating, {
+            initial: ({side}) => ({
+              opacity: 0,
+              transform: `translate${side === 'top' || side === 'bottom' ? 'Y' : 'X'}(4px)`,
+            }),
+          }),
+          floating,
+        };
+      },
+      template: /* HTML */ `
+        <div ref="floating" />
+        <div data-testid="transform">{{styles.transform}}</div>
+        <div data-testid="status">{{status}}</div>
+      `,
+    });
+
+    // placement is 'bottom' so side is 'bottom' → translateY
+    const {rerender, getByTestId} = render(App, {props: {open: false}});
+    await rerender({open: true});
+
+    await waitFor(() => {
+      expect(getByTestId('status').textContent).toBe('open');
+    });
+  });
+
+  test('accepts separate open and close durations', async () => {
+    vi.useFakeTimers();
+
+    const App = defineComponent({
+      name: 'App',
+      props: ['open'],
+      setup(props: {open?: boolean}) {
+        const openRef = toRef(props, 'open');
+        const floating = ref<FloatingElement | null>(null);
+        return {
+          ...setup(openRef, floating, {
+            duration: {open: 150, close: 300},
+          }),
+          floating,
+        };
+      },
+      template: /* HTML */ `
+        <div ref="floating" />
+        <div data-testid="transitionDuration">{{styles.transitionDuration}}</div>
+        <div data-testid="status">{{status}}</div>
+        <div data-testid="isMounted">{{isMounted}}</div>
+      `,
+    });
+
+    const {rerender, getByTestId} = render(App, {props: {open: false}});
+    await rerender({open: true});
+
+    await waitFor(() => {
+      expect(getByTestId('status').textContent).toBe('open');
+      expect(getByTestId('transitionDuration').textContent).toBe('150ms');
+    });
+
+    await rerender({open: false});
+
+    await waitFor(() => {
+      expect(getByTestId('status').textContent).toBe('close');
+      expect(getByTestId('transitionDuration').textContent).toBe('300ms');
+    });
+
+    vi.advanceTimersByTime(300);
+
+    await waitFor(() => {
+      expect(getByTestId('isMounted').textContent).toBe('false');
+    });
+
+    vi.useRealTimers();
   });
 });

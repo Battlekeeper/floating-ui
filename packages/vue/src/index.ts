@@ -2,6 +2,16 @@ export {arrow} from './arrow';
 export type * from './types';
 export {useFloating} from './useFloating';
 export {
+  useTransitionStatus,
+  useTransitionStyles,
+} from './useTransition';
+export type {
+  FloatingContext,
+  TransitionStatus,
+  UseTransitionStatusProps,
+  UseTransitionStylesProps,
+} from './useTransition';
+export {
   autoPlacement,
   autoUpdate,
   computePosition,
